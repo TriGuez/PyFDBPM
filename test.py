@@ -1,7 +1,6 @@
 from source import BPModel
 from tools import *
 import numpy as np
-import matplotlib.pyplot as plt
 
 def StepIndexRI(X, Y, P):
     nClad = silica_index(P.lambda0)

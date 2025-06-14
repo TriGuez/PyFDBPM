@@ -59,11 +59,10 @@ class BPModel:
     def solve_modes(self, Nmodes=10, plotModes=False, coreRadius=5e-6):
         h = max(self.x[1] - self.x[0], self.y[1] - self.y[0])
         k0 = 2 * np.pi / self.lambda0
-        N = self.N  # suppose Nx == Ny ici
+        N = self.N 
 
-        # Laplacian operator (5-point stencil)
         lowerdiag = np.ones(N**2)
-        lowerdiag[N-1::N] = 0  # remove wrap connections
+        lowerdiag[N-1::N] = 0 
         upperdiag = np.roll(lowerdiag, 1)
 
         diagonals = [
@@ -107,25 +106,23 @@ class BPModel:
         Nmodes_total = self.modes.shape[2]
 
         if combination:
-            # Cas : tous les modes sont combinés
             if mode_index == 'all':
                 indices = np.arange(Nmodes_total)
-            # Cas : liste d’indices fournie
             elif isinstance(mode_index, (list, np.ndarray)):
                 indices = np.array(mode_index)
                 if np.any((indices < 0) | (indices >= Nmodes_total)):
-                    raise ValueError(f"Tous les indices doivent être dans [0, {Nmodes_total-1}]")
+                    raise ValueError(f"Modes idexes should be in [0, {Nmodes_total-1}]")
             else:
-                raise ValueError("En mode combinaison, mode_index doit être 'all' ou une liste d'indices.")
+                raise ValueError("In combination mode, mode_index should be 'all' or a list of indexes")
 
             coeffs = np.random.randn(len(indices)) + 1j * np.random.randn(len(indices))
             selected_modes = self.modes[:, :, indices]
             field = np.sum(selected_modes * coeffs[None, None, :], axis=2)
         else:
             if not isinstance(mode_index, int):
-                raise ValueError("En mode simple, mode_index doit être un entier.")
+                raise ValueError("In standard mode, mode_index should be an integer")
             if mode_index < 0 or mode_index >= Nmodes_total:
-                raise ValueError(f"mode_index doit être dans [0, {Nmodes_total-1}]")
+                raise ValueError(f"mode_index should be in [0, {Nmodes_total-1}]")
             field = self.modes[:, :, mode_index]
 
         self.field = field

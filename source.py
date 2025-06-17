@@ -3,6 +3,9 @@ import inspect
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+from tqdm import tqdm
+
 
 class BPModel:
     def __init__(self):
@@ -14,6 +17,19 @@ class BPModel:
         self.RI = None
         self.lambda0 = 1000e-9
         self.field = None
+        self.n0 = 1
+        self._Lz = 1e-3
+        self.update_dz()
+        self.build_absorption_profile()
+
+    @property
+    def Lz(self):
+        return self._Lz
+    
+    @Lz.setter
+    def Lz(self, val):
+        self._Lz = val
+        self.update_dz()
 
     @property
     def N(self):
@@ -46,6 +62,9 @@ class BPModel:
         self.x = np.linspace(-self._xmax/2, self._xmax/2, self._N)
         self.y = np.linspace(-self._ymax/2, self._ymax/2, self._N)
         self.X, self.Y = np.meshgrid(self.x, self.y, indexing='ij')
+
+    def update_dz(self):
+        self.dz = 1e-6
 
     def set_RI_from_function(self, func):
         numArgs = len(inspect.signature(func).parameters)
@@ -148,3 +167,102 @@ class BPModel:
         plt.title('Field intensity')
         plt.show()
 
+    def propagate_full(self, animate=True):
+        self.construct_operators()
+
+        steps = int(np.ceil(self.Lz / self.dz))
+
+        if animate:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+            im1 = ax1.imshow(np.abs(self.field)**2, extent=[self.x[0]*1e6, self.x[-1]*1e6,
+                                                        self.y[0]*1e6, self.y[-1]*1e6],
+                            origin='lower', cmap='jet', vmin=0, vmax=1)
+            ax1.set_title("Intensity |Ez|²")
+            ax1.set_xlabel("x (µm)")
+            ax1.set_ylabel("y (µm)")
+            fig.colorbar(im1, ax=ax1)
+
+            im2 = ax2.imshow(np.angle(self.field), extent=[self.x[0]*1e6, self.x[-1]*1e6,
+                                                        self.y[0]*1e6, self.y[-1]*1e6],
+                            origin='lower', cmap='twilight', vmin=-np.pi, vmax=np.pi)
+            ax2.set_title("Phase arg(Ez)")
+            ax2.set_xlabel("x (µm)")
+            ax2.set_ylabel("y (µm)")
+            fig.colorbar(im2, ax=ax2)
+
+            def update(frame):
+
+                Ez_vec = spla.spsolve(self.B, self.C @ self.field.ravel())
+
+                Ez = Ez_vec.reshape(self._N, self._N)
+
+                self.field = Ez
+
+                im1.set_data(np.abs(Ez)**2 / np.abs(Ez).max()**2)
+                im2.set_data(np.angle(Ez))
+                return im1, im2
+
+            ani = animation.FuncAnimation(fig, update, frames=steps, interval=2, blit=True)
+            plt.show()
+        else:
+            for _ in tqdm(range(steps), desc="Propagation distance", unit="Steps", colour='green'):
+                Ez_vec = spla.spsolve(self.B, self.C @ self.field.ravel())
+                Ez = Ez_vec.reshape(self._N, self._N)
+                self.field = Ez 
+            self.show_field()
+
+    def build_absorption_profile(self, alpha_max=3e14, border_ratio=0.5):
+  
+        Xnorm = 2 * np.abs(self.X) / self._xmax
+        Ynorm = 2 * np.abs(self.Y) / self._ymax
+
+        ramp_x = np.clip((Xnorm - (1 - border_ratio)) / border_ratio, 0, 1)
+        ramp_y = np.clip((Ynorm - (1 - border_ratio)) / border_ratio, 0, 1)
+
+        alpha = alpha_max * (ramp_x + ramp_y)**2
+        self.abs_profile = np.exp(-alpha * self.dz)
+
+    def construct_operators(self) :
+        dx = self._xmax/self._N
+        dy = self._ymax/self._N
+        k0 = 2*np.pi/self.lambda0
+        ax = self.dz/(2*dx**2)
+        ay = self.dz/(2*dy**2)
+        b = 2*1j*k0*self.n0 + (self.dz/(dx**2)) + (self.dz/(dy**2)) - ((k0**2*self.dz)/2)*(self.RI.ravel()**2 - self.n0**2)
+        c = 2*1j*k0*self.n0 - (self.dz/(dx**2)) - (self.dz/(dy**2)) + ((k0**2*self.dz)/2)*(self.RI.ravel()**2 - self.n0**2)
+
+        Bindiag = -ax*np.ones(self.N**2-1)
+        Boutdiag = -ay*np.ones(self.N**2-self.N)
+        for i in range(1, self.N):
+            Bindiag[i * self.N - 1] = 0
+        
+        self.B = sp.diags([b], [0], format='csr') + sp.diags([Bindiag,Bindiag], offsets=[-1,1], format='csr')+ sp.diags([Boutdiag,Boutdiag], offsets=[-self.N,self.N], format='csr')
+        self.C = sp.diags([c], [0], format='csr') + sp.diags([-Bindiag,-Bindiag], offsets=[-1,1], format='csr')+ sp.diags([-Boutdiag,-Boutdiag], offsets=[-self.N,self.N], format='csr')
+    
+    def shift_field(self, dx=0, dy=0):
+
+        if self.field is None:
+            raise RuntimeError("No field defined")
+
+        N = self.N
+        fx = int(np.round(dx))
+        fy = int(np.round(dy))
+
+        shifted = np.zeros_like(self.field, dtype=complex)
+
+        x_start_src = max(0, -fx)
+        x_end_src = N - max(0, fx)
+        y_start_src = max(0, -fy)
+        y_end_src = N - max(0, fy)
+
+        x_start_dst = max(0, fx)
+        x_end_dst = N - max(0, -fx)
+        y_start_dst = max(0, fy)
+        y_end_dst = N - max(0, -fy)
+
+        
+        shifted[x_start_dst:x_end_dst, y_start_dst:y_end_dst] = \
+            self.field[x_start_src:x_end_src, y_start_src:y_end_src]
+
+        self.field = shifted

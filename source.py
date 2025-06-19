@@ -212,15 +212,18 @@ class BPModel:
         self.P2 = sp.diags([2*ay*np.ones(self._N**2)], [0], format='csr') + sp.diags([-ay*np.ones(self._N**2-self._N),-ay*np.ones(self._N**2-self._N)], [-self._N,self._N], format='csr')
         self.Q = sp.diags([d*np.ones(self._N**2)], [0], format='csr') + sp.diags([ax*np.ones(self._N**2-1),ax*np.ones(self._N**2-1)], [-1,1], format='csr') + sp.diags([-ay*np.ones(self._N**2-self._N),-ay*np.ones(self._N**2-self._N)], [-self._N,self._N], format='csr')
         
+    
     def propagate_full(self, animate=True):
         self.operators_DGAI()
-
+        LU1 = spla.splu((sp.eye(self._N**2)+self.P1).tocsc())
+        LU2 = spla.splu((sp.eye(self._N**2)+self.P2).tocsc())
         steps = int(np.ceil(self.Lz / self.dz))
+        absorption = self.calculate_absorption()
 
         if animate:
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
-            # Affichage initial de l'intensité
+            
             im1 = ax1.imshow(
                 np.abs(self.field)**2,
                 extent=[self.x[0]*1e6, self.x[-1]*1e6, self.y[0]*1e6, self.y[-1]*1e6],
@@ -231,7 +234,7 @@ class BPModel:
             ax1.set_ylabel("y (µm)")
             fig.colorbar(im1, ax=ax1)
 
-            # Affichage initial de la phase (RGBA, initialisé à zéro)
+            
             phase = np.angle(self.field)
             phase_norm = (phase + np.pi) / (2 * np.pi)
             intensity = np.abs(self.field)
@@ -251,7 +254,7 @@ class BPModel:
             ax2.set_ylabel("y (µm)")
             fig.colorbar(cm.ScalarMappable(cmap='twilight', norm=plt.Normalize(-np.pi, np.pi)), ax=ax2)
 
-            # Ajout du texte pour la distance
+            
             distance_text = ax1.text(
                 0.02, 0.95, '', transform=ax1.transAxes, color='white',
                 fontsize=14, bbox=dict(facecolor='black', alpha=0.5)
@@ -260,23 +263,17 @@ class BPModel:
             steps = int(self.Lz / self.dz)
 
             def update(frame):
-                # --- Propagation (à adapter selon ton code) ---
-                Ezprime = spla.spsolve(
-                    sp.eye(self._N**2) + self.P1,
-                    -self.P2 @ self.field.ravel() + self.Q @ self.field.ravel()
-                )
-                Ez_vec = spla.spsolve(
-                    sp.eye(self._N**2) + self.P2,
-                    Ezprime + self.P2 @ self.field.ravel()
-                )
+                
+                rhs1 = -self.P2 @ self.field.ravel() + self.Q @ self.field.ravel()
+                Ezprime = LU1.solve(rhs1)
+                rhs2 = Ezprime + self.P2 @ self.field.ravel()
+                Ez_vec = LU2.solve(rhs2)
                 Ez = Ez_vec.reshape(self._N, self._N)
                 phase_factor = np.exp(-self.dz*self.k0/(2*1j*self.n0)*(self.RI**2 - self.n0**2))
-                self.field = Ez * phase_factor
+                self.field = Ez * (phase_factor * absorption)
 
-                # --- Intensité ---
                 im1.set_data(np.abs(self.field)**2 / np.abs(self.field).max()**2)
 
-                # --- Phase RGBA avec transparence logarithmique ---
                 intensity = np.abs(self.field)
                 maxE0 = intensity.max()
                 alpha = np.maximum(0, (1 + np.log10((intensity / maxE0)**2) / 3))
@@ -286,8 +283,7 @@ class BPModel:
                 rgba_img[..., 3] = alpha
                 im2.set_data(rgba_img)
 
-                # --- Distance parcourue ---
-                distance = (frame+1) * self.dz * 1e6  # en microns
+                distance = (frame+1) * self.dz * 1e6  
                 distance_text.set_text(f"z = {distance:.1f} µm")
 
                 return im1, im2, distance_text
@@ -300,10 +296,27 @@ class BPModel:
 
         else:
             for _ in tqdm(range(steps), desc="Propagation distance", unit="Steps", colour='green'):
-                Ezprime = spla.spsolve(sp.eye(self._N**2) + self.P1, -self.P2 @ self.field.ravel() + self.Q @ self.field.ravel())
-                Ez_vec = spla.spsolve(sp.eye(self._N**2) + self.P2, Ezprime + self.P2 @ self.field.ravel())
+                rhs1 = -self.P2 @ self.field.ravel() + self.Q @ self.field.ravel()
+                Ezprime = LU1.solve(rhs1)
+                rhs2 = Ezprime + self.P2 @ self.field.ravel()
+                Ez_vec = LU2.solve(rhs2)
                 Ez = Ez_vec.reshape(self._N, self._N)
                 phase = np.exp(-self.dz*self.k0/(2*1j*self.n0)*(self.RI**2 - self.n0**2))
-                self.field = Ez * (phase)
-                #self.field /= np.sqrt(np.sum(np.abs(self.field)**2))
+                self.field = Ez * (phase * absorption)
+                self.field /= np.sqrt(np.sum(np.abs(self.field)**2))
             self.show_field()
+        
+    def calculate_absorption(self):
+        alpha = 3e14  
+        xEdge = self.x.max() * 0.5  
+        yEdge = self.y.max() * 0.5  
+        
+        dist_to_edge = np.maximum(
+            np.abs(self.X) - xEdge,
+            np.abs(self.Y) - yEdge)
+        
+        absorption = np.ones_like(self.X)
+        mask = dist_to_edge > 0
+        absorption[mask] = np.exp(-self.dz * alpha * dist_to_edge[mask]**2)
+        
+        return absorption

@@ -161,7 +161,7 @@ class BPModel:
         plt.imshow(intensity.T, extent=[self.x[0]*1e6, self.x[-1]*1e6, self.y[0]*1e6, self.y[-1]*1e6], 
                 origin='lower', cmap='jet')
         levels = np.linspace(np.min(self.RI), np.max(self.RI), 10)
-        plt.contour(self.x*1e6, self.y*1e6, self.RI.T, levels=levels, colors='white', linewidths=0.8)
+        #plt.contour(self.x*1e6, self.y*1e6, self.RI.T, levels=levels, colors='white', linewidths=0.8)
         plt.xlabel('x (µm)')
         plt.ylabel('y (µm)')
         plt.title('Field intensity')
@@ -219,6 +219,7 @@ class BPModel:
         LU2 = spla.splu((sp.eye(self._N**2)+self.P2).tocsc())
         steps = int(np.ceil(self.Lz / self.dz))
         absorption = self.calculate_absorption()
+        self.initPower = np.abs(np.trapz(np.trapz(self.field * self.field.conjugate(),self.x), self.y))**2
 
         if animate:
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
@@ -303,20 +304,21 @@ class BPModel:
                 Ez = Ez_vec.reshape(self._N, self._N)
                 phase = np.exp(-self.dz*self.k0/(2*1j*self.n0)*(self.RI**2 - self.n0**2))
                 self.field = Ez * (phase * absorption)
+                self.remainingPower = np.abs(np.trapz(np.trapz(self.field * self.field.conjugate(),self.x), self.y))**2
                 self.field /= np.sqrt(np.sum(np.abs(self.field)**2))
             self.show_field()
         
     def calculate_absorption(self):
         alpha = 3e14  
-        xEdge = self.x.max() * 0.5  
-        yEdge = self.y.max() * 0.5  
+        xEdge = self.x.max() * 0.8  
+        yEdge = self.y.max() * 0.8  
         
         dist_to_edge = np.maximum(
             np.abs(self.X) - xEdge,
             np.abs(self.Y) - yEdge)
         
-        absorption = np.ones_like(self.X)
+        absorption = np.ones_like(self.X, dtype=complex)
         mask = dist_to_edge > 0
-        absorption[mask] = np.exp(-self.dz * alpha * dist_to_edge[mask]**2)
+        absorption[mask] = np.exp(-self.dz *alpha * dist_to_edge[mask]**2)
         
         return absorption
